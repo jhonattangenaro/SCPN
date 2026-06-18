@@ -1,0 +1,733 @@
+{% extends "base.html" %}
+{% block title %}Gráfico General - Consulta Popular 2026{% endblock %}
+{% block page_title %}Gráfico General{% endblock %}
+
+{% block extra_css %}
+<style>
+.chart-card {
+    background: var(--card-bg);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 4px 12px var(--border-color);
+    margin-bottom: 24px;
+}
+.chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.chart-title {
+    color: var(--azul-principal);
+    font-weight: 700;
+    font-size: .95rem;
+    margin: 0;
+}
+.export-btns { display: flex; gap: 6px; }
+.btn-export {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 13px;
+    border-radius: 8px;
+    font-size: .75rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: opacity .15s;
+}
+.btn-pdf  { background: var(--azul-principal); color: #fff; }
+.btn-img  { background: var(--azul-secundario); color: #fff; }
+.btn-pdf:hover, .btn-img:hover { opacity: .85; }
+.btn-export:disabled { opacity: .45; cursor: not-allowed; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set pct = ((total_votos_reportados / total_empleados * 100) if total_empleados > 0 else 0) | round(1) %}
+
+{# ── Datos ocultos para JS ── #}
+<span id="_g-total"  style="display:none">{{ total_empleados | int }}</span>
+<span id="_g-votos"  style="display:none">{{ total_votos_reportados | int }}</span>
+<span id="_g-faltan" style="display:none">{{ votos_faltantes | int }}</span>
+<span id="_g-pct"    style="display:none">{{ pct }}</span>
+<span id="_g-logo"   style="display:none">{{ logo_b64 if logo_b64 else '' }}</span>
+
+<!-- ══ Fila 1: Donut + Módulos ══ -->
+<div class="row g-4 mb-2">
+
+    <!-- Donut General -->
+    <div class="col-12 col-lg-4">
+        <div class="chart-card h-100 d-flex flex-column">
+            <div class="chart-header">
+                <h6 class="chart-title"><i class="fas fa-circle-half-stroke me-2"></i>Participación General</h6>
+                <div class="export-btns">
+                    <button class="btn-export btn-pdf" onclick="exportSimplePdf('donut-section','Participación General')">
+                        <i class="fas fa-file-pdf"></i>PDF
+                    </button>
+                    <button class="btn-export btn-img" onclick="exportImg('donut-section','participacion-general')">
+                        <i class="fas fa-image"></i>Imagen
+                    </button>
+                </div>
+            </div>
+            <div id="donut-section" style="flex:1">
+                <p style="color:var(--text-secondary);font-size:.8rem;text-align:center;margin-bottom:12px">Gobernación del Estado Bolívar</p>
+                <div style="position:relative;display:flex;justify-content:center;margin-bottom:16px">
+                    <canvas id="donutChart" width="200" height="200"></canvas>
+                    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
+                        <div id="pct-general" style="font-size:2.2rem;font-weight:900;color:var(--azul-principal);line-height:1">{{ pct }}%</div>
+                        <div style="font-size:.7rem;color:var(--text-secondary)">participación</div>
+                    </div>
+                </div>
+                <div class="row g-2 text-center">
+                    <div class="col-4">
+                        <div style="background:#eef2ff;border-radius:10px;padding:10px">
+                            <div id="total-general" style="font-size:1.2rem;font-weight:800;color:var(--azul-principal)">{{ total_empleados | int }}</div>
+                            <div style="font-size:.7rem;color:var(--text-secondary)">Total</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div style="background:#f0fdf4;border-radius:10px;padding:10px">
+                            <div id="votos-total" style="font-size:1.2rem;font-weight:800;color:#16a34a">{{ total_votos_reportados | int }}</div>
+                            <div style="font-size:.7rem;color:var(--text-secondary)">Votaron</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div style="background:#fff3f4;border-radius:10px;padding:10px">
+                            <div id="faltan-total" style="font-size:1.2rem;font-weight:800;color:#D7263D">{{ votos_faltantes | int }}</div>
+                            <div style="font-size:.7rem;color:var(--text-secondary)">Faltan</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="text-center mt-3">
+                <small class="text-muted"><i class="fas fa-sync-alt me-1"></i>Actualiza cada 10 segundos</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Barras módulos -->
+    <div class="col-12 col-lg-8">
+        <div class="chart-card h-100">
+            <div class="chart-header">
+                <h6 class="chart-title"><i class="fas fa-chart-bar me-2"></i>Comparativa por Módulo</h6>
+                <div class="export-btns">
+                    <button class="btn-export btn-pdf" onclick="exportModulosPdf()">
+                        <i class="fas fa-file-pdf"></i>PDF
+                    </button>
+                    <button class="btn-export btn-img" onclick="exportImg('modulos-section','comparativa-modulos')">
+                        <i class="fas fa-image"></i>Imagen
+                    </button>
+                </div>
+            </div>
+            <div id="modulos-section">
+                <div style="position:relative;height:240px">
+                    <canvas id="modulosBarChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ══ Secretarías ══ -->
+<div class="chart-card">
+    <div class="chart-header">
+        <h6 class="chart-title"><i class="fas fa-building-columns me-2"></i>Participación por Secretaría</h6>
+        <div class="export-btns">
+            <button id="btn-pdf-sec" class="btn-export btn-pdf" onclick="exportEntidadPdf('secretarias','Participación por Secretaría')" disabled>
+                <i class="fas fa-file-pdf"></i>PDF
+            </button>
+            <button id="btn-img-sec" class="btn-export btn-img" onclick="exportImg('sec-section','secretarias')" disabled>
+                <i class="fas fa-image"></i>Imagen
+            </button>
+        </div>
+    </div>
+    <div id="sec-section">
+        <div id="secBarLoading" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Cargando datos...</div>
+        <canvas id="secBarChart" style="display:none"></canvas>
+    </div>
+</div>
+
+<!-- ══ Institutos + Jubilados ══ -->
+<div class="row g-4">
+    <div class="col-12 col-lg-12">
+        <div class="chart-card">
+            <div class="chart-header">
+                <h6 class="chart-title"><i class="fas fa-university me-2"></i>Participación por Instituto</h6>
+                <div class="export-btns">
+                    <button id="btn-pdf-ins" class="btn-export btn-pdf" onclick="exportEntidadPdf('institutos','Participación por Instituto')" disabled>
+                        <i class="fas fa-file-pdf"></i>PDF
+                    </button>
+                    <button id="btn-img-ins" class="btn-export btn-img" onclick="exportImg('ins-section','institutos')" disabled>
+                        <i class="fas fa-image"></i>Imagen
+                    </button>
+                </div>
+            </div>
+            <div id="ins-section">
+                <div id="insBarLoading" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Cargando datos...</div>
+                <canvas id="insBarChart" style="display:none"></canvas>
+            </div>
+        </div>
+    </div>
+    <!-- <div class="col-12 col-lg-6">
+        <div class="chart-card">
+            <div class="chart-header">
+                <h6 class="chart-title"><i class="fas fa-people-roof me-2"></i>Participación por Jubilados</h6>
+                <div class="export-btns">
+                    <button id="btn-pdf-jub" class="btn-export btn-pdf" onclick="exportEntidadPdf('jubilados','Participación por Jubilados')" disabled>
+                        <i class="fas fa-file-pdf"></i>PDF
+                    </button>
+                    <button id="btn-img-jub" class="btn-export btn-img" onclick="exportImg('jub-section','jubilados')" disabled>
+                        <i class="fas fa-image"></i>Imagen
+                    </button>
+                </div>
+            </div>
+            <div id="jub-section">
+                <div id="jubBarLoading" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Cargando datos...</div>
+                <canvas id="jubBarChart" style="display:none"></canvas>
+            </div>
+        </div>
+    </div> -->
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+const { jsPDF } = window.jspdf;
+
+let totalGen  = parseInt(document.getElementById('_g-total').textContent);
+let votosGen  = parseInt(document.getElementById('_g-votos').textContent);
+let faltanGen = parseInt(document.getElementById('_g-faltan').textContent);
+const LOGO_B64 = document.getElementById('_g-logo').textContent.trim();
+
+let donutChart, modulosBarChart, secBarChart, insBarChart, jubBarChart;
+const entidadesCache = { secretarias:[], institutos:[], jubilados:[] };
+let statsCache = null;
+
+// ════════════════════════════════════════
+// HELPERS PDF (colores azules) - SIN CAMBIOS
+// ════════════════════════════════════════
+async function logoConOpacidad(b64, opacidad) {
+    return new Promise(resolve => {
+        if (!b64) { resolve(null); return; }
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = img.width; c.height = img.height;
+            const ctx = c.getContext('2d');
+            ctx.globalAlpha = opacidad;
+            ctx.drawImage(img, 0, 0);
+            resolve(c.toDataURL('image/png'));
+        };
+        img.onerror = () => resolve(null);
+        img.src = 'data:image/png;base64,' + b64;
+    });
+}
+
+const _logoCache = {};
+async function getLogoData(opacidad) {
+    const key = String(opacidad);
+    if (!_logoCache[key]) {
+        _logoCache[key] = await logoConOpacidad(LOGO_B64, opacidad);
+    }
+    return _logoCache[key];
+}
+
+async function pdfHeader(pdf, subtitulo) {
+    const pw = pdf.internal.pageSize.getWidth();
+    pdf.setFillColor(11, 59, 110); // Azul principal
+    pdf.rect(0, 0, pw, 20, 'F');
+    if (LOGO_B64) {
+        try {
+            const logoData = await getLogoData(0.75);
+            if (logoData) {
+                const logoH = 15, logoW = 15;
+                pdf.addImage(logoData, 'PNG', 6, 2.5, logoW, logoH);
+            }
+        } catch(e) { /* opcional */ }
+    }
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(12);
+    pdf.text('CONSULTA POPULAR NACIONAL 2026', pw / 2, 8.5, { align: 'center' });
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8.5);
+    pdf.text('Gobernación del Estado Bolívar  ·  ' + subtitulo, pw / 2, 15.5, { align: 'center' });
+}
+
+function pdfFooter(pdf, pagActual, pagTotal) {
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    pdf.setDrawColor(220, 220, 220);
+    pdf.line(10, ph - 10, pw - 10, ph - 10);
+    pdf.setTextColor(160, 160, 160);
+    pdf.setFontSize(7.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('Generado: ' + new Date().toLocaleString('es-VE'), 12, ph - 5);
+    pdf.text('Página ' + pagActual + ' de ' + pagTotal, pw - 12, ph - 5, { align: 'right' });
+}
+
+async function pdfWatermark(pdf) {
+    if (!LOGO_B64) return;
+    try {
+        const pw  = pdf.internal.pageSize.getWidth();
+        const ph  = pdf.internal.pageSize.getHeight();
+        const wSize = Math.min(pw, ph) * 0.50;
+        const logoData = await getLogoData(0.06);
+        if (logoData) {
+            pdf.addImage(logoData, 'PNG',
+                (pw - wSize) / 2, (ph - wSize) / 2, wSize, wSize);
+        }
+    } catch(e) { /* opcional */ }
+}
+
+// ════════════════════════════════════════
+// EXPORTAR IMAGEN
+// ════════════════════════════════════════
+async function exportImg(sectionId, filename) {
+    const el = document.getElementById(sectionId);
+    try {
+        const canvas = await html2canvas(el, { backgroundColor:'#ffffff', scale:2, useCORS:true });
+        const link = document.createElement('a');
+        link.download = filename + '_' + new Date().toLocaleDateString('es-VE').replace(/\//g,'-') + '.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    } catch(e) { alert('Error al generar imagen: ' + e.message); }
+}
+
+// ════════════════════════════════════════
+// EXPORTAR PDF SIMPLE (donut / módulos)
+// ════════════════════════════════════════
+async function exportSimplePdf(sectionId, titulo) {
+    const el = document.getElementById(sectionId);
+    try {
+        const snap   = await html2canvas(el, { backgroundColor:'#ffffff', scale:2, useCORS:true });
+        const imgData = snap.toDataURL('image/png');
+        const pdf    = new jsPDF({ orientation:'landscape', unit:'mm', format:'a4' });
+        const pw     = pdf.internal.pageSize.getWidth();
+        const ph     = pdf.internal.pageSize.getHeight();
+
+        await pdfHeader(pdf, titulo);
+        await pdfWatermark(pdf);
+
+        const ratio = snap.width / snap.height;
+        const imgW  = pw - 24;
+        const imgH  = Math.min(imgW / ratio, ph - 36);
+        pdf.addImage(imgData, 'PNG', 12, 24, imgW, imgH);
+        pdfFooter(pdf, 1, 1);
+
+        pdf.save(titulo.toLowerCase().replace(/ /g,'_') + '_' + fmtFecha() + '.pdf');
+    } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ════════════════════════════════════════
+// EXPORTAR PDF MÓDULOS con tabla resumen
+// ════════════════════════════════════════
+async function exportModulosPdf() {
+    if (!statsCache) { alert('Datos aún no cargados, espera un momento.'); return; }
+    try {
+        const snap    = await html2canvas(document.getElementById('modulos-section'), { backgroundColor:'#ffffff', scale:2, useCORS:true });
+        const imgData = snap.toDataURL('image/png');
+        const pdf     = new jsPDF({ orientation:'landscape', unit:'mm', format:'a4' });
+        const pw      = pdf.internal.pageSize.getWidth();
+        const ph      = pdf.internal.pageSize.getHeight();
+
+        await pdfHeader(pdf, 'Comparativa por Módulo');
+        await pdfWatermark(pdf);
+        const ratio = snap.width / snap.height;
+        const imgW  = pw - 24;
+        const imgH  = Math.min(imgW / ratio, ph - 36);
+        pdf.addImage(imgData, 'PNG', 12, 24, imgW, imgH);
+        pdfFooter(pdf, 1, 2);
+
+        pdf.addPage();
+        await pdfHeader(pdf, 'Detalle — Comparativa por Módulo');
+        await pdfWatermark(pdf);
+
+        const s   = statsCache;
+        const rows = [
+            ['Secretarías', s.secretarias.total, s.secretarias.votos, s.secretarias.total-s.secretarias.votos],
+            ['Institutos',  s.institutos.total,  s.institutos.votos,  s.institutos.total-s.institutos.votos],
+           // ['Jubilados',   s.jubilados.total,    s.jubilados.votos,   s.jubilados.total-s.jubilados.votos],
+        ];
+        const totT = rows.reduce((a,r)=>a+r[1],0);
+        const totV = rows.reduce((a,r)=>a+r[2],0);
+        const totF = rows.reduce((a,r)=>a+r[3],0);
+
+        dibujarTabla(pdf, ['MÓDULO','TOTAL','VOTARON','FALTAN','%'], rows.map(r=>{
+            const pct = r[1]>0?(r[2]/r[1]*100).toFixed(1):'0.0';
+            return [r[0], r[1], r[2], r[3], pct+'%'];
+        }), ['TOTAL GENERAL', totT, totV, totF, (totT>0?(totV/totT*100).toFixed(1):'0.0')+'%'],
+        [pw-20-60, 20, 22, 22, 16], 28, pdf, [11,59,110]);
+        pdfFooter(pdf, 2, 2);
+
+        pdf.save('comparativa_modulos_' + fmtFecha() + '.pdf');
+    } catch(e) { alert('Error: ' + e.message); console.error(e); }
+}
+
+// ════════════════════════════════════════
+// DIBUJA BARRAS HORIZONTALES NATIVAS EN PDF (azules) - SIN CAMBIOS
+// ════════════════════════════════════════
+async function dibujarGraficoBarrasPdf(pdf, data, colorRGB, startY) {
+    const pw = pdf.internal.pageSize.getWidth();
+    const ph = pdf.internal.pageSize.getHeight();
+    const [r,g,b] = colorRGB;
+
+    const marginLeft  = 68;
+    const marginRight = 20;
+    const chartW      = pw - marginLeft - marginRight;
+    const barH        = 5.5;
+    const barGap      = 2.2;
+    const rowH        = barH + barGap;
+
+    const disponible  = ph - startY - 22;
+    const maxFilas    = Math.floor(disponible / rowH);
+    const filasPag    = Math.min(data.length, maxFilas);
+    const totalAlto   = filasPag * rowH;
+
+    const maxVal = Math.max(...data.map(e => e.total), 1);
+
+    data.slice(0, filasPag).forEach((e, i) => {
+        const y = startY + i * rowH;
+        if (i % 2 === 0) {
+            pdf.setFillColor(248, 249, 250);
+            pdf.rect(10, y, pw - 20, rowH, 'F');
+        }
+    });
+
+    data.slice(0, filasPag).forEach((e, i) => {
+        const y       = startY + i * rowH + 0.8;
+        const wVotos  = (e.votos  / maxVal) * chartW;
+        const wFaltan = ((e.total - e.votos) / maxVal) * chartW;
+
+        pdf.setFillColor(r, g, b, 0.18);
+        pdf.setFillColor(
+            Math.min(255, r + Math.round((255-r)*0.75)),
+            Math.min(255, g + Math.round((255-g)*0.75)),
+            Math.min(255, b + Math.round((255-b)*0.75))
+        );
+        if (wVotos + wFaltan > 0.5) {
+            pdf.rect(marginLeft, y, wVotos + wFaltan, barH, 'F');
+        }
+
+        pdf.setFillColor(r, g, b);
+        if (wVotos > 0.5) {
+            pdf.rect(marginLeft, y, wVotos, barH, 'F');
+        }
+
+        const nombre = e.name.length > 30 ? e.name.substring(0, 30) + '…' : e.name;
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(6.2);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(nombre, marginLeft - 2, y + barH * 0.68, { align: 'right' });
+
+        if (e.votos > 0) {
+            const pct = e.total > 0 ? (e.votos / e.total * 100).toFixed(0) : 0;
+            pdf.setFontSize(5.5);
+            pdf.setTextColor(r, g, b);
+            pdf.text(`${e.votos} (${pct}%)`, marginLeft + wVotos + wFaltan + 1, y + barH * 0.68);
+        }
+    });
+
+    const ejeY = startY + totalAlto + 1;
+    pdf.setDrawColor(180, 180, 180);
+    pdf.setLineWidth(0.3);
+    pdf.line(marginLeft, ejeY, marginLeft + chartW, ejeY);
+
+    const ticks = 5;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(6);
+    pdf.setTextColor(130, 130, 130);
+    for (let t = 0; t <= ticks; t++) {
+        const x   = marginLeft + (chartW / ticks) * t;
+        const val = Math.round((maxVal / ticks) * t);
+        pdf.line(x, ejeY, x, ejeY + 1.5);
+        pdf.text(String(val), x, ejeY + 4.5, { align: 'center' });
+    }
+
+    const leyY = ejeY + 8;
+    pdf.setFillColor(r, g, b);
+    pdf.rect(marginLeft, leyY, 7, 3, 'F');
+    pdf.setTextColor(50, 50, 50);
+    pdf.setFontSize(6.5);
+    pdf.text('Votaron', marginLeft + 8.5, leyY + 2.5);
+
+    const claro = [
+        Math.min(255, r + Math.round((255-r)*0.75)),
+        Math.min(255, g + Math.round((255-g)*0.75)),
+        Math.min(255, b + Math.round((255-b)*0.75))
+    ];
+    pdf.setFillColor(...claro);
+    pdf.rect(marginLeft + 32, leyY, 7, 3, 'F');
+    pdf.text('Faltan', marginLeft + 40.5, leyY + 2.5);
+
+    return { dibujadas: filasPag, hayMas: data.length > filasPag };
+}
+
+// ════════════════════════════════════════
+// EXPORTAR PDF ENTIDAD — gráfico nativo + tabla paginada (azul) - SIN CAMBIOS
+// ════════════════════════════════════════
+async function exportEntidadPdf(modulo, titulo) {
+    const data = entidadesCache[modulo];
+    if (!data || data.length === 0) { alert('No hay datos para exportar.'); return; }
+
+    const colores = { secretarias:[11,59,110], institutos:[27,94,158], jubilados:[245,166,35] };
+    const color   = colores[modulo];
+
+    try {
+        const barH      = 5.5, barGap = 2.2, rowH = barH + barGap;
+        const startYGraf = 28;
+        const phRef     = 210;
+        const disponible = phRef - startYGraf - 22;
+        const filasPorPagGraf = Math.floor(disponible / rowH);
+
+        const rowHTab    = 7;
+        const startYTab  = 30;
+        const bodyHTab   = phRef - startYTab - 18;
+        const filasPorPagTab = Math.floor(bodyHTab / rowHTab);
+
+        const paginasGraf = Math.ceil(data.length / filasPorPagGraf);
+        const paginasTab  = Math.ceil(data.length / filasPorPagTab);
+        const totalPags   = paginasGraf + paginasTab;
+
+        const pdf = new jsPDF({ orientation:'landscape', unit:'mm', format:'a4' });
+        const pw  = pdf.internal.pageSize.getWidth();
+        const ph  = pdf.internal.pageSize.getHeight();
+
+        const totalMod = data.reduce((s,e)=>s+e.total, 0);
+        const votosMod = data.reduce((s,e)=>s+e.votos, 0);
+        const faltMod  = totalMod - votosMod;
+        const pctMod   = totalMod>0?(votosMod/totalMod*100).toFixed(1):'0.0';
+
+        let pagActual = 1;
+        for (let chunk = 0; chunk < paginasGraf; chunk++) {
+            if (chunk > 0) pdf.addPage();
+            const subtit = paginasGraf > 1 ? `${titulo} (${chunk+1}/${paginasGraf})` : titulo;
+            await pdfHeader(pdf, subtit);
+            await pdfWatermark(pdf);
+
+            pdf.setFont('helvetica','bold'); pdf.setFontSize(8.5); pdf.setTextColor(50,50,50);
+            pdf.text(`Total: ${totalMod}   `, pw/2 - 38, 25.5);
+            pdf.setTextColor(22,163,74);
+            pdf.text(`Votaron: ${votosMod}   `, pw/2 - 10, 25.5);
+            pdf.setTextColor(11,59,110);
+            pdf.text(`Faltan: ${faltMod}   `, pw/2 + 22, 25.5);
+            pdf.setTextColor(50,50,50);
+            pdf.text(`Part.: ${pctMod}%`, pw/2 + 50, 25.5);
+
+            const slice = data.slice(chunk * filasPorPagGraf, (chunk+1) * filasPorPagGraf);
+            await dibujarGraficoBarrasPdf(pdf, slice, color, startYGraf + 4);
+            pdfFooter(pdf, pagActual++, totalPags);
+        }
+
+        const filas = data.map(e => {
+            const p = e.total>0?(e.votos/e.total*100).toFixed(1):'0.0';
+            return [e.name, e.total, e.votos, e.total-e.votos, p+'%'];
+        });
+        const filasTotales = ['TOTAL GENERAL', totalMod, votosMod, faltMod, pctMod+'%'];
+        const colWidths = [pw - 20 - 60, 20, 22, 22, 16];
+        const headers   = ['NOMBRE', 'TOTAL', 'VOTARON', 'FALTAN', '%'];
+
+        for (let i = 0; i < filas.length; i += filasPorPagTab) {
+            pdf.addPage();
+            const subtit = paginasTab > 1
+                ? `Detalle — ${titulo} (${Math.floor(i/filasPorPagTab)+1}/${paginasTab})`
+                : `Detalle — ${titulo}`;
+            await pdfHeader(pdf, subtit);
+            await pdfWatermark(pdf);
+
+            if (i === 0) {
+                pdf.setFont('helvetica','bold'); pdf.setFontSize(8.5); pdf.setTextColor(50,50,50);
+                pdf.text(`Total: ${totalMod}   `, pw/2 - 38, 26);
+                pdf.setTextColor(22,163,74);
+                pdf.text(`Votaron: ${votosMod}   `, pw/2 - 10, 26);
+                pdf.setTextColor(11,59,110);
+                pdf.text(`Faltan: ${faltMod}   `, pw/2 + 22, 26);
+                pdf.setTextColor(50,50,50);
+                pdf.text(`Part.: ${pctMod}%`, pw/2 + 50, 26);
+            }
+
+            const chunk    = filas.slice(i, i + filasPorPagTab);
+            const esFinal  = (i + filasPorPagTab) >= filas.length;
+            dibujarTabla(pdf, headers, chunk,
+                esFinal ? filasTotales : null,
+                colWidths, i===0 ? 30 : 24, pdf, color);
+            pdfFooter(pdf, pagActual++, totalPags);
+        }
+
+        pdf.save(titulo.toLowerCase().replace(/ /g,'_') + '_' + fmtFecha() + '.pdf');
+    } catch(e) { alert('Error al generar PDF: ' + e.message); console.error(e); }
+}
+
+function dibujarTabla(pdf, headers, filas, filaTotales, colWidths, startY, _pdf, colorRGB) {
+    const pw   = pdf.internal.pageSize.getWidth();
+    const ph   = pdf.internal.pageSize.getHeight();
+    const rowH = 7;
+    const x0   = 10;
+    let y = startY;
+    const [r,g,b] = colorRGB;
+
+    pdf.setFillColor(r,g,b);
+    pdf.rect(x0, y, pw-20, rowH, 'F');
+    pdf.setTextColor(255,255,255);
+    pdf.setFont('helvetica','bold');
+    pdf.setFontSize(7.5);
+    let xc = x0 + 2;
+    headers.forEach((h, i) => {
+        pdf.text(h, i===0 ? xc : xc + colWidths[i]/2, y+5, { align: i===0?'left':'center' });
+        xc += colWidths[i];
+    });
+    y += rowH;
+
+    pdf.setFont('helvetica','normal');
+    pdf.setFontSize(7.2);
+    filas.forEach((fila, idx) => {
+        if (idx % 2 === 0) { pdf.setFillColor(248,249,250); pdf.rect(x0, y, pw-20, rowH, 'F'); }
+        let xf = x0 + 2;
+        fila.forEach((val, i) => {
+            if (i===2)      pdf.setTextColor(22,163,74);
+            else if (i===3) pdf.setTextColor(11,59,110);
+            else            pdf.setTextColor(50,50,50);
+            const txt = String(val).length > 58 ? String(val).substring(0,58)+'…' : String(val);
+            pdf.text(txt, i===0 ? xf : xf+colWidths[i]/2, y+5, { align: i===0?'left':'center' });
+            xf += colWidths[i];
+        });
+        pdf.setDrawColor(230,230,230);
+        pdf.line(x0, y+rowH, pw-x0, y+rowH);
+        y += rowH;
+    });
+
+    if (filaTotales) {
+        pdf.setFillColor(255,243,244);
+        pdf.rect(x0, y, pw-20, rowH, 'F');
+        pdf.setFont('helvetica','bold');
+        pdf.setFontSize(7.5);
+        let xt = x0 + 2;
+        filaTotales.forEach((val, i) => {
+            pdf.setTextColor(i===2?22:i===3?11:r, i===2?163:i===3?59:g, i===2?74:i===3?110:b);
+            pdf.text(String(val), i===0?xt:xt+colWidths[i]/2, y+5, {align:i===0?'left':'center'});
+            xt += colWidths[i];
+        });
+    }
+}
+
+function fmtFecha() {
+    return new Date().toLocaleDateString('es-VE').replace(/\//g,'-');
+}
+
+// ════════════════════════════════════════
+// GRÁFICOS (con rojo para faltantes)
+// ════════════════════════════════════════
+function buildDonut(v, f) {
+    if (donutChart) donutChart.destroy();
+    donutChart = new Chart(document.getElementById('donutChart').getContext('2d'), {
+        type: 'doughnut',
+        data: { labels:['Votaron','Faltan'], datasets:[{ data:[v,f], backgroundColor:['#0B3B6E','#D7263D'], borderWidth:0, hoverOffset:8 }] },
+        options: { responsive:false, cutout:'68%', plugins:{ legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}, tooltip:{callbacks:{label:c=>c.label+': '+c.parsed.toLocaleString()}} } }
+    });
+}
+
+function buildModulosBar(stats) {
+    if (modulosBarChart) modulosBarChart.destroy();
+    const labels = ['Secretarías','Institutos','Jubilados'];
+    const votos  = [stats.secretarias.votos, stats.institutos.votos, stats.jubilados.votos];
+    const faltan = [stats.secretarias.total-stats.secretarias.votos, stats.institutos.total-stats.institutos.votos, stats.jubilados.total-stats.jubilados.votos];
+    modulosBarChart = new Chart(document.getElementById('modulosBarChart').getContext('2d'), {
+        type:'bar',
+        data:{ labels, datasets:[
+            {label:'Votaron', data:votos,  backgroundColor:['#0B3B6E','#1B5E9E','#F5A623'], borderRadius:8, borderSkipped:false},
+            {label:'Faltan',  data:faltan, backgroundColor:['#D7263D','#D7263D','#D7263D'], borderRadius:8, borderSkipped:false} // Rojo para todos
+        ]},
+        options:{ responsive:true, maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}}, tooltip:{mode:'index',intersect:false}},
+            scales:{x:{stacked:true,grid:{display:false}}, y:{stacked:true,grid:{display:false}}}
+        }
+    });
+}
+
+function buildEntidadBar(canvasId, loadingId, data, color) {
+    const loading = document.getElementById(loadingId);
+    const canvas  = document.getElementById(canvasId);
+    if (!data || data.length===0) { loading.innerHTML='<span style="color:#aaa;font-size:.82rem">Sin datos</span>'; return null; }
+    loading.style.display='none'; canvas.style.display='block';
+    canvas.parentElement.style.height = Math.max(220, data.length*42)+'px';
+    const labels = data.map(e=>e.name.length>38?e.name.substring(0,38)+'…':e.name);
+    const votos  = data.map(e=>e.votos);
+    const faltan = data.map(e=>e.total-e.votos);
+    const pcts   = data.map(e=>e.total>0?(e.votos/e.total*100).toFixed(1):'0.0');
+    return new Chart(canvas.getContext('2d'), {
+        type:'bar',
+        data:{labels, datasets:[
+            {label:'Votaron', data:votos,  backgroundColor:color,      borderRadius:5, borderSkipped:false},
+            {label:'Faltan',  data:faltan, backgroundColor:'#D7263D', borderRadius:5, borderSkipped:false} // Rojo fijo
+        ]},
+        options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y',
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11}}},
+                tooltip:{mode:'index',intersect:false,callbacks:{afterBody:items=>[`Participación: ${pcts[items[0].dataIndex]}%`]}}},
+            scales:{x:{stacked:true,grid:{display:false},ticks:{font:{size:10}}},
+                    y:{stacked:true,grid:{display:false},ticks:{font:{size:10},autoSkip:false}}}
+        }
+    });
+}
+
+// ════════════════════════════════════════
+// CARGAR ENTIDADES
+// ════════════════════════════════════════
+async function cargarEntidades() {
+    const cfgs = [
+        {mod:'secretarias', canvas:'secBarChart', loading:'secBarLoading', color:'#0B3B6E', bp:'btn-pdf-sec', bi:'btn-img-sec'},
+        {mod:'institutos',  canvas:'insBarChart', loading:'insBarLoading', color:'#1B5E9E', bp:'btn-pdf-ins', bi:'btn-img-ins'},
+        {mod:'jubilados',   canvas:'jubBarChart', loading:'jubBarLoading', color:'#F5A623', bp:'btn-pdf-jub', bi:'btn-img-jub'},
+    ];
+    for (const cfg of cfgs) {
+        try {
+            const data = await (await fetch('/api/stats/entidades?modulo='+cfg.mod)).json();
+            entidadesCache[cfg.mod] = data;
+            buildEntidadBar(cfg.canvas, cfg.loading, data, cfg.color);
+            document.getElementById(cfg.bp).disabled = false;
+            document.getElementById(cfg.bi).disabled = false;
+        } catch(e) {
+            document.getElementById(cfg.loading).innerHTML='<span style="color:#aaa;font-size:.82rem">Error al cargar</span>';
+        }
+    }
+}
+
+// ════════════════════════════════════════
+// POLLING
+// ════════════════════════════════════════
+function actualizarDatos() {
+    fetch('/api/stats').then(r=>r.json()).then(data=>{
+        statsCache = data;
+        totalGen  = data.secretarias.total+data.institutos.total+data.jubilados.total;
+        votosGen  = data.secretarias.votos +data.institutos.votos +data.jubilados.votos;
+        faltanGen = totalGen-votosGen;
+        const pct = totalGen>0?(votosGen/totalGen*100).toFixed(1):0;
+        if (donutChart){donutChart.data.datasets[0].data=[votosGen,faltanGen];donutChart.update();}
+        buildModulosBar(data);
+        document.getElementById('pct-general').textContent  = pct+'%';
+        document.getElementById('total-general').textContent = totalGen;
+        document.getElementById('votos-total').textContent   = votosGen;
+        document.getElementById('faltan-total').textContent  = faltanGen;
+    }).catch(e=>console.error(e));
+}
+
+// ════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async ()=>{
+    try {
+        const data = await (await fetch('/api/stats')).json();
+        statsCache = data;
+        buildDonut(votosGen, faltanGen);
+        buildModulosBar(data);
+    } catch { buildDonut(votosGen, faltanGen); }
+    await cargarEntidades();
+    setInterval(actualizarDatos, 10000);
+});
+</script>
+{% endblock %}

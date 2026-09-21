@@ -12,8 +12,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 
-# Configuración de base de datos
-if os.environ.get('RENDER'):
+# Configuración de base de datos para Render con Disco Persistente
+if os.path.exists('/data'):
+    DATABASE = '/data/elecciones.db'
+elif os.environ.get('RENDER'):
     DATABASE = '/tmp/elecciones.db'
 else:
     DATABASE = 'elecciones.db'

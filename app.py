@@ -1,9 +1,10 @@
-# app.py - Versión 2.6 con permiso "Acceso Total"
+# app.py - Versión 2.6 con permiso "Acceso Total" y soporte para disco persistente en Render
 import sqlite3
 import os
 import base64
 import hashlib
 import secrets
+import shutil
 from flask import Flask, render_template, request, jsonify, g, session, redirect, url_for, flash
 from datetime import datetime, timedelta
 from functools import wraps
@@ -12,9 +13,12 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 
-# Configuración de base de datos para Render con Disco Persistente
+# Configuración de base de datos con soporte para disco persistente en Render
 if os.path.exists('/data'):
     DATABASE = '/data/elecciones.db'
+    if not os.path.exists(DATABASE) and os.path.exists('elecciones.db'):
+        shutil.copy('elecciones.db', DATABASE)
+        print("✅ Base de datos copiada exitosamente al disco persistente en /data")
 elif os.environ.get('RENDER'):
     DATABASE = '/tmp/elecciones.db'
 else:
@@ -889,4 +893,5 @@ def test():
     return "✅ App v2.6 funcionando"
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     app.run(debug=True, host='0.0.0.0', port=port)

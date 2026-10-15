@@ -1,11 +1,12 @@
-# app.py - Versión 2.6 con permiso "Acceso Total" y soporte para disco persistente en Render
+# app.py - Versión 2.8 con respaldo JSON y soporte Render
 import sqlite3
 import os
+import json
 import base64
 import hashlib
 import secrets
 import shutil
-from flask import Flask, render_template, request, jsonify, g, session, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, g, session, redirect, url_for, flash, Response
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -13,18 +14,53 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 
-# Configuración de base de datos con soporte para disco persistente en Render
-if os.path.exists('/data'):
+# ---------- Configuración de Base de Datos ----------
+# ORDEN DE PRIORIDAD:
+#   1) Render con disco persistente montado en /data
+#   2) Render sin disco persistente (fallback a /tmp)
+#   3) PythonAnywhere (home persistente en ~/SCPN)
+#   4) Servidor genérico con /data montado (Docker, VPS, etc.)
+#   5) Desarrollo local
+
+if os.environ.get('RENDER'):
+    # ── RENDER ──
+    # Si hay disco persistente montado, /data existirá
+    if os.path.exists('/data'):
+        DATABASE = '/data/elecciones.db'
+        # Copiar BD semilla si es la primera vez en Render
+        if not os.path.exists(DATABASE) and os.path.exists('elecciones.db'):
+            try:
+                shutil.copy('elecciones.db', DATABASE)
+                print("✅ BD copiada al disco persistente /data/elecciones.db")
+            except Exception as e:
+                print(f"⚠ No se pudo copiar la BD semilla: {e}")
+    else:
+        # Sin disco persistente (plan sin disk o fallback)
+        DATABASE = '/tmp/elecciones.db'
+        print("⚠ Render sin disco persistente — usando /tmp (datos NO persisten)")
+
+elif os.path.exists('/home'):
+    # ── PYTHONANYWHERE / LINUX ──
+    HOME = os.path.expanduser('~')
+    scpn_path = os.path.join(HOME, 'SCPN')
+    if os.path.exists(scpn_path):
+        DATABASE = os.path.join(scpn_path, 'elecciones.db')
+    else:
+        DATABASE = 'elecciones.db'
+
+elif os.path.exists('/data'):
+    # ── Disco persistente genérico ──
     DATABASE = '/data/elecciones.db'
     if not os.path.exists(DATABASE) and os.path.exists('elecciones.db'):
         shutil.copy('elecciones.db', DATABASE)
-        print("✅ Base de datos copiada exitosamente al disco persistente en /data")
-elif os.environ.get('RENDER'):
-    DATABASE = '/tmp/elecciones.db'
+        print("✅ BD copiada al disco persistente /data")
+
 else:
+    # ── Desarrollo local ──
     DATABASE = 'elecciones.db'
 
-# Datos iniciales secretarías (sin cambios)
+print(f"📂 Base de datos: {DATABASE}")
+
 SECRETARIAS_INICIALES = [
     ("DESPACHO DEL GOBERNADOR", 192),
     ("SECRETARIA CULTURAL", 264),
@@ -50,7 +86,7 @@ SECRETARIAS_INICIALES = [
     ("SECRETARIA UNICA DEL SISTEMA INTEGRAL DE PROTECCION DE NIÑOS, NIÑAS Y ADOLESCENTES", 29),
 ]
 
-# Helpers auth
+# ---------- Auth ----------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -73,7 +109,6 @@ def superuser_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# Nuevo decorador: permite superusuario o acceso total
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -116,7 +151,7 @@ def permission_required(module):
         return decorated
     return decorator
 
-# Inicializar base de datos (con migración is_full_access)
+# ---------- Init BD ----------
 def init_db():
     print(f"Inicializando BD en: {DATABASE}")
     conn = sqlite3.connect(DATABASE)
@@ -133,7 +168,6 @@ def init_db():
             is_active    INTEGER NOT NULL DEFAULT 1,
             created_at   TEXT    NOT NULL
         );
-
         CREATE TABLE IF NOT EXISTS user_permissions (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id  INTEGER NOT NULL,
@@ -143,7 +177,6 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id),
             UNIQUE(user_id, module)
         );
-
         CREATE TABLE IF NOT EXISTS user_entity_permissions (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id    INTEGER NOT NULL,
@@ -153,28 +186,24 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id),
             UNIQUE(user_id, module, entity_id)
         );
-
         CREATE TABLE IF NOT EXISTS secretarias (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT    UNIQUE NOT NULL,
             empleados        INTEGER NOT NULL DEFAULT 0,
             votos_reportados INTEGER NOT NULL DEFAULT 0
         );
-
         CREATE TABLE IF NOT EXISTS institutos (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT    UNIQUE NOT NULL,
             empleados        INTEGER NOT NULL DEFAULT 0,
             votos_reportados INTEGER NOT NULL DEFAULT 0
         );
-
         CREATE TABLE IF NOT EXISTS jubilados (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             name             TEXT    UNIQUE NOT NULL,
             total            INTEGER NOT NULL DEFAULT 0,
             votos_reportados INTEGER NOT NULL DEFAULT 0
         );
-
         CREATE TABLE IF NOT EXISTS secretarias_history (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             entidad_id    INTEGER NOT NULL,
@@ -183,7 +212,6 @@ def init_db():
             user_id       INTEGER,
             FOREIGN KEY (entidad_id) REFERENCES secretarias(id)
         );
-
         CREATE TABLE IF NOT EXISTS institutos_history (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             entidad_id    INTEGER NOT NULL,
@@ -192,7 +220,6 @@ def init_db():
             user_id       INTEGER,
             FOREIGN KEY (entidad_id) REFERENCES institutos(id)
         );
-
         CREATE TABLE IF NOT EXISTS jubilados_history (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             entidad_id    INTEGER NOT NULL,
@@ -203,11 +230,10 @@ def init_db():
         );
     """)
 
-    # Migración para usuarios existentes (si la columna no existe)
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_full_access INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
-        pass  # ya existe
+        pass
 
     existing = cursor.execute("SELECT id FROM users WHERE username='admin'").fetchone()
     if not existing:
@@ -224,7 +250,7 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print("✅ Base de datos inicializada (con is_full_access)")
+    print("✅ Base de datos inicializada")
 
 init_db()
 
@@ -235,7 +261,7 @@ try:
 except Exception as e:
     print(f"❌ Error registrando blueprint: {e}")
 
-# Funciones de BD
+# ---------- Helpers BD ----------
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
@@ -263,7 +289,8 @@ def refresh_entity_modules():
 
 def get_user_permissions(user_id):
     if session.get('is_superuser') or session.get('is_full_access'):
-        return {mod: {'can_view': True, 'can_edit': True} for mod in ['secretarias', 'institutos', 'jubilados', 'grafico_general']}
+        return {mod: {'can_view': True, 'can_edit': True}
+                for mod in ['secretarias', 'institutos', 'jubilados', 'grafico_general']}
     db = get_db()
     perms = db.execute("SELECT module, can_view, can_edit FROM user_permissions WHERE user_id=?", (user_id,)).fetchall()
     return {p['module']: {'can_view': bool(p['can_view']), 'can_edit': bool(p['can_edit'])} for p in perms}
@@ -300,22 +327,49 @@ def can_edit_entity(user_id, module, entity_id):
     ).fetchone()
     return bool(ep and ep['can_edit'])
 
-# API stats
+# ---------- API stats (SIN jubilados) ----------
 @app.route('/api/stats')
 @login_required
 def api_stats():
     db = get_db()
     rs = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM secretarias").fetchone()
     ri = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM institutos").fetchone()
-    rj = db.execute("SELECT COALESCE(SUM(total),0) te, COALESCE(SUM(votos_reportados),0) tv FROM jubilados").fetchone()
-    
     return jsonify({
         'secretarias': {'total': rs['te'], 'votos': rs['tv']},
         'institutos':  {'total': ri['te'], 'votos': ri['tv']},
-        'jubilados':   {'total': rj['te'], 'votos': rj['tv']},
     })
 
-# Auth routes
+# ---------- API: todas las entidades ----------
+@app.route('/api/entidades_todas')
+@login_required
+def api_entidades_todas():
+    db = get_db()
+    result = []
+    sec_rows = db.execute(
+        "SELECT id, name, empleados AS total, votos_reportados AS votos FROM secretarias ORDER BY name"
+    ).fetchall()
+    for r in sec_rows:
+        result.append({
+            'id': f'sec_{r["id"]}',
+            'name': r['name'],
+            'modulo': 'secretarias',
+            'total': r['total'],
+            'votos': r['votos'],
+        })
+    ins_rows = db.execute(
+        "SELECT id, name, empleados AS total, votos_reportados AS votos FROM institutos ORDER BY name"
+    ).fetchall()
+    for r in ins_rows:
+        result.append({
+            'id': f'ins_{r["id"]}',
+            'name': r['name'],
+            'modulo': 'institutos',
+            'total': r['total'],
+            'votos': r['votos'],
+        })
+    return jsonify(result)
+
+# ---------- Auth routes ----------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if 'user_id' in session:
@@ -356,22 +410,20 @@ def logout():
     flash('Sesión cerrada correctamente.', 'info')
     return redirect(url_for('login'))
 
-# Dashboard
+# ---------- Dashboard ----------
 @app.route('/')
 @login_required
 def dashboard():
     db = get_db()
     rs = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM secretarias").fetchone()
     ri = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM institutos").fetchone()
-    rj = db.execute("SELECT COALESCE(SUM(total),0) te, COALESCE(SUM(votos_reportados),0) tv FROM jubilados").fetchone()
     stats = {
         'secretarias': {'total': rs['te'], 'votos': rs['tv']},
         'institutos':  {'total': ri['te'], 'votos': ri['tv']},
-        'jubilados':   {'total': rj['te'], 'votos': rj['tv']},
     }
     return render_template('dashboard.html', stats=stats)
 
-# Admin usuarios
+# ---------- Admin usuarios ----------
 MODULES = ['secretarias', 'institutos', 'jubilados', 'grafico_general']
 
 @app.route('/admin/usuarios')
@@ -408,10 +460,7 @@ def admin_usuarios():
         tp = {}
         for mod in MODULES:
             if mod == 'grafico_general':
-                if mod in mod_perms[u['id']]:
-                    tp[mod] = 'global'
-                else:
-                    tp[mod] = 'none'
+                tp[mod] = 'global' if mod in mod_perms[u['id']] else 'none'
             else:
                 if mod in mod_perms[u['id']]:
                     tp[mod] = 'global'
@@ -563,7 +612,7 @@ def reset_password(user_id):
     flash('Contraseña actualizada correctamente.', 'success')
     return redirect(url_for('admin_usuarios'))
 
-# Admin entidades
+# ---------- Admin entidades ----------
 @app.route('/admin/entidades')
 @admin_required
 def admin_entidades():
@@ -641,7 +690,193 @@ def eliminar_entidad(tipo, eid):
     flash('Entidad eliminada.', 'success')
     return redirect(url_for('admin_entidades'))
 
-# Módulos
+# ---------- Respaldo / Restaurar ----------
+@app.route('/admin/respaldo')
+@admin_required
+def admin_respaldo():
+    db = get_db()
+    stats = {
+        'users':                db.execute("SELECT COUNT(*) c FROM users").fetchone()['c'],
+        'secretarias':          db.execute("SELECT COUNT(*) c FROM secretarias").fetchone()['c'],
+        'institutos':           db.execute("SELECT COUNT(*) c FROM institutos").fetchone()['c'],
+        'jubilados':            db.execute("SELECT COUNT(*) c FROM jubilados").fetchone()['c'],
+        'secretarias_history':  db.execute("SELECT COUNT(*) c FROM secretarias_history").fetchone()['c'],
+        'institutos_history':   db.execute("SELECT COUNT(*) c FROM institutos_history").fetchone()['c'],
+        'jubilados_history':    db.execute("SELECT COUNT(*) c FROM jubilados_history").fetchone()['c'],
+    }
+    return render_template('admin_respaldo.html', stats=stats)
+
+
+@app.route('/admin/respaldo/descargar')
+@admin_required
+def descargar_respaldo():
+    db = get_db()
+    tablas = [
+        'users', 'secretarias', 'institutos', 'jubilados',
+        'user_permissions', 'user_entity_permissions',
+        'secretarias_history', 'institutos_history', 'jubilados_history'
+    ]
+    backup = {
+        'app': 'SCPN - Consulta Popular Nacional 2026',
+        'version': '1.0',
+        'fecha_generacion': datetime.now().isoformat(),
+        'generado_por': session.get('username', 'desconocido'),
+        'datos': {}
+    }
+    for tabla in tablas:
+        try:
+            rows = db.execute(f"SELECT * FROM {tabla}").fetchall()
+            backup['datos'][tabla] = [dict(r) for r in rows]
+        except Exception as e:
+            print(f"⚠ Error exportando {tabla}: {e}")
+            backup['datos'][tabla] = []
+
+    # Copia local de seguridad
+    try:
+        carpeta = os.path.dirname(os.path.abspath(DATABASE))
+        ruta_copia = os.path.join(carpeta, 'ultimo_respaldo.json')
+        with open(ruta_copia, 'w', encoding='utf-8') as f:
+            json.dump(backup, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠ No se pudo guardar copia local del respaldo: {e}")
+
+    json_bytes = json.dumps(backup, ensure_ascii=False, indent=2).encode('utf-8')
+    fname = f"respaldo_scpn_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        json_bytes,
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename={fname}'}
+    )
+
+
+@app.route('/admin/respaldo/importar', methods=['POST'])
+@admin_required
+def importar_respaldo():
+    if 'archivo' not in request.files:
+        flash('No se seleccionó ningún archivo.', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    archivo = request.files['archivo']
+    if not archivo.filename:
+        flash('Nombre de archivo vacío.', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    if not archivo.filename.lower().endswith('.json'):
+        flash('El archivo debe tener extensión .json', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    modo = request.form.get('modo', 'reemplazar')
+
+    try:
+        contenido = archivo.read().decode('utf-8')
+        data = json.loads(contenido)
+    except Exception as e:
+        flash(f'Error al leer el JSON: {e}', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    if 'datos' not in data or not isinstance(data['datos'], dict):
+        flash('Estructura de respaldo inválida (falta la clave "datos").', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    if not str(data.get('app', '')).startswith('SCPN'):
+        flash('Este archivo no parece ser un respaldo de SCPN.', 'danger')
+        return redirect(url_for('admin_respaldo'))
+
+    db = get_db()
+    tablas_orden = [
+        'users', 'secretarias', 'institutos', 'jubilados',
+        'user_permissions', 'user_entity_permissions',
+        'secretarias_history', 'institutos_history', 'jubilados_history'
+    ]
+
+    admin_actual = None
+    if session.get('user_id'):
+        row = db.execute("SELECT * FROM users WHERE id=?", (session['user_id'],)).fetchone()
+        if row:
+            admin_actual = dict(row)
+
+    try:
+        if modo == 'reemplazar':
+            db.execute("PRAGMA foreign_keys = OFF")
+            for t in reversed(tablas_orden):
+                try:
+                    db.execute(f"DELETE FROM {t}")
+                except Exception as e:
+                    print(f"⚠ No se pudo borrar {t}: {e}")
+            db.commit()
+
+        totales = {}
+        for tabla in tablas_orden:
+            rows = data['datos'].get(tabla, [])
+            if not isinstance(rows, list):
+                totales[tabla] = 0
+                continue
+
+            insertados = 0
+            for row in rows:
+                if not isinstance(row, dict) or not row:
+                    continue
+                cols = list(row.keys())
+                placeholders = ','.join(['?'] * len(cols))
+                col_names = ','.join(f'"{c}"' for c in cols)
+                valores = [row[c] for c in cols]
+
+                try:
+                    if modo == 'reemplazar':
+                        db.execute(f"INSERT INTO {tabla} ({col_names}) VALUES ({placeholders})", valores)
+                        insertados += 1
+                    else:
+                        if 'id' in row:
+                            existe = db.execute(f"SELECT 1 FROM {tabla} WHERE id=?", (row['id'],)).fetchone()
+                            if existe:
+                                set_clause = ','.join(f'"{c}"=?' for c in cols if c != 'id')
+                                update_vals = [row[c] for c in cols if c != 'id'] + [row['id']]
+                                db.execute(f"UPDATE {tabla} SET {set_clause} WHERE id=?", update_vals)
+                                insertados += 1
+                                continue
+                        db.execute(f"INSERT INTO {tabla} ({col_names}) VALUES ({placeholders})", valores)
+                        insertados += 1
+                except sqlite3.IntegrityError as ie:
+                    print(f"⚠ Conflicto en {tabla}: {ie}")
+                except Exception as e:
+                    print(f"⚠ Error insertando en {tabla}: {e}")
+
+            totales[tabla] = insertados
+
+        # Reajustar AUTOINCREMENT
+        for tabla in tablas_orden:
+            try:
+                maxid = db.execute(f"SELECT COALESCE(MAX(id),0) m FROM {tabla}").fetchone()['m']
+                db.execute("UPDATE sqlite_sequence SET seq=? WHERE name=?", (maxid, tabla))
+            except Exception:
+                pass
+
+        db.execute("PRAGMA foreign_keys = ON")
+        db.commit()
+
+        # Preservar admin si fue borrado
+        if modo == 'reemplazar' and admin_actual:
+            existe = db.execute("SELECT id FROM users WHERE id=?", (admin_actual['id'],)).fetchone()
+            if not existe:
+                db.execute(
+                    "INSERT INTO users (id, username, password, full_name, is_superuser, is_full_access, is_active, created_at) "
+                    "VALUES (?,?,?,?,1,?,1,?)",
+                    (admin_actual['id'], admin_actual['username'], admin_actual['password'],
+                     admin_actual['full_name'], admin_actual.get('is_full_access', 0),
+                     admin_actual['created_at'])
+                )
+                db.commit()
+
+        resumen = ' · '.join([f"{k}: {v}" for k, v in totales.items() if v])
+        flash(f'✅ Respaldo importado correctamente (modo: {modo}). {resumen}', 'success')
+
+    except Exception as e:
+        db.rollback()
+        flash(f'❌ Error al importar el respaldo: {e}', 'danger')
+
+    return redirect(url_for('admin_respaldo'))
+
+# ---------- Módulos ----------
 @app.route('/secretarias')
 @login_required
 @permission_required('secretarias')
@@ -742,6 +977,7 @@ def delete_voto_instituto(eid, hid):
         return jsonify({'status': 'error', 'message': 'Sin permisos'}), 403
     return _delete_voto(get_db(), 'institutos', eid, hid, 'empleados', 'institutos_history')
 
+# ---------- Rutas de Jubilados (ocultas en UI) ----------
 @app.route('/jubilados')
 @login_required
 @permission_required('jubilados')
@@ -765,7 +1001,7 @@ def jubilado_detail(eid):
     db = get_db()
     allowed = get_allowed_entity_ids(session['user_id'], 'jubilados')
     if allowed is not None and eid not in allowed:
-        flash('No tienes acceso a este grupo de jubilados.', 'danger')
+        flash('No tienes acceso a este grupo.', 'danger')
         return redirect(url_for('jubilados_list'))
     row = db.execute("SELECT * FROM jubilados WHERE id=?", (eid,)).fetchone()
     if not row: return "No encontrado", 404
@@ -833,7 +1069,7 @@ def _delete_voto(db, tabla, eid, hid, campo_total, history_table):
     ).fetchall()
     return jsonify({'status': 'success', 'new_votos': total, 'history': [dict(h) for h in history]})
 
-# Gráfico general
+# ---------- Gráfico general ----------
 @app.route('/grafico')
 @login_required
 @permission_required('grafico_general')
@@ -841,9 +1077,8 @@ def grafico_general():
     db = get_db()
     rs = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM secretarias").fetchone()
     ri = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM institutos").fetchone()
-    rj = db.execute("SELECT COALESCE(SUM(total),0) te, COALESCE(SUM(votos_reportados),0) tv FROM jubilados").fetchone()
-    total = rs['te'] + ri['te'] + rj['te']
-    votos = rs['tv'] + ri['tv'] + rj['tv']
+    total = rs['te'] + ri['te']
+    votos = rs['tv'] + ri['tv']
 
     logo_b64 = ''
     try:
@@ -866,7 +1101,7 @@ def grafico_general():
 def grafico_general_legacy():
     return redirect(url_for('grafico_general'))
 
-# API para entidades
+# ---------- API para entidades ----------
 @app.route('/api/stats/entidades')
 @login_required
 def api_stats_entidades():
@@ -890,8 +1125,8 @@ def api_stats_entidades():
 
 @app.route('/test')
 def test():
-    return "✅ App v2.6 funcionando"
+    return "✅ App v2.8 funcionando en Render"
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8060))
     app.run(debug=True, host='0.0.0.0', port=port)

@@ -1,4 +1,4 @@
-# app.py - Versión 2.8 con respaldo JSON y soporte Render
+# app.py - Versión 2.9 (fix Render: jubilados en dashboard + disco persistente)
 import sqlite3
 import os
 import json
@@ -15,48 +15,28 @@ app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
 
 # ---------- Configuración de Base de Datos ----------
-# ORDEN DE PRIORIDAD:
-#   1) Render con disco persistente montado en /data
-#   2) Render sin disco persistente (fallback a /tmp)
-#   3) PythonAnywhere (home persistente en ~/SCPN)
-#   4) Servidor genérico con /data montado (Docker, VPS, etc.)
-#   5) Desarrollo local
-
 if os.environ.get('RENDER'):
     # ── RENDER ──
-    # Si hay disco persistente montado, /data existirá
     if os.path.exists('/data'):
         DATABASE = '/data/elecciones.db'
-        # Copiar BD semilla si es la primera vez en Render
         if not os.path.exists(DATABASE) and os.path.exists('elecciones.db'):
             try:
                 shutil.copy('elecciones.db', DATABASE)
-                print("✅ BD copiada al disco persistente /data/elecciones.db")
+                print(f"✅ BD copiada al disco persistente: {DATABASE}")
             except Exception as e:
                 print(f"⚠ No se pudo copiar la BD semilla: {e}")
     else:
-        # Sin disco persistente (plan sin disk o fallback)
         DATABASE = '/tmp/elecciones.db'
         print("⚠ Render sin disco persistente — usando /tmp (datos NO persisten)")
-
 elif os.path.exists('/home'):
-    # ── PYTHONANYWHERE / LINUX ──
     HOME = os.path.expanduser('~')
     scpn_path = os.path.join(HOME, 'SCPN')
-    if os.path.exists(scpn_path):
-        DATABASE = os.path.join(scpn_path, 'elecciones.db')
-    else:
-        DATABASE = 'elecciones.db'
-
+    DATABASE = os.path.join(scpn_path, 'elecciones.db') if os.path.exists(scpn_path) else 'elecciones.db'
 elif os.path.exists('/data'):
-    # ── Disco persistente genérico ──
     DATABASE = '/data/elecciones.db'
     if not os.path.exists(DATABASE) and os.path.exists('elecciones.db'):
         shutil.copy('elecciones.db', DATABASE)
-        print("✅ BD copiada al disco persistente /data")
-
 else:
-    # ── Desarrollo local ──
     DATABASE = 'elecciones.db'
 
 print(f"📂 Base de datos: {DATABASE}")
@@ -327,7 +307,7 @@ def can_edit_entity(user_id, module, entity_id):
     ).fetchone()
     return bool(ep and ep['can_edit'])
 
-# ---------- API stats (SIN jubilados) ----------
+# ---------- API stats ----------
 @app.route('/api/stats')
 @login_required
 def api_stats():
@@ -410,16 +390,18 @@ def logout():
     flash('Sesión cerrada correctamente.', 'info')
     return redirect(url_for('login'))
 
-# ---------- Dashboard ----------
+# ---------- Dashboard (FIX: incluir jubilados con 0) ----------
 @app.route('/')
 @login_required
 def dashboard():
     db = get_db()
     rs = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM secretarias").fetchone()
     ri = db.execute("SELECT COALESCE(SUM(empleados),0) te, COALESCE(SUM(votos_reportados),0) tv FROM institutos").fetchone()
+    rj = db.execute("SELECT COALESCE(SUM(total),0) te, COALESCE(SUM(votos_reportados),0) tv FROM jubilados").fetchone()
     stats = {
         'secretarias': {'total': rs['te'], 'votos': rs['tv']},
         'institutos':  {'total': ri['te'], 'votos': ri['tv']},
+        'jubilados':   {'total': rj['te'], 'votos': rj['tv']},
     }
     return render_template('dashboard.html', stats=stats)
 
@@ -731,7 +713,6 @@ def descargar_respaldo():
             print(f"⚠ Error exportando {tabla}: {e}")
             backup['datos'][tabla] = []
 
-    # Copia local de seguridad
     try:
         carpeta = os.path.dirname(os.path.abspath(DATABASE))
         ruta_copia = os.path.join(carpeta, 'ultimo_respaldo.json')
@@ -843,7 +824,6 @@ def importar_respaldo():
 
             totales[tabla] = insertados
 
-        # Reajustar AUTOINCREMENT
         for tabla in tablas_orden:
             try:
                 maxid = db.execute(f"SELECT COALESCE(MAX(id),0) m FROM {tabla}").fetchone()['m']
@@ -854,7 +834,6 @@ def importar_respaldo():
         db.execute("PRAGMA foreign_keys = ON")
         db.commit()
 
-        # Preservar admin si fue borrado
         if modo == 'reemplazar' and admin_actual:
             existe = db.execute("SELECT id FROM users WHERE id=?", (admin_actual['id'],)).fetchone()
             if not existe:
@@ -977,7 +956,7 @@ def delete_voto_instituto(eid, hid):
         return jsonify({'status': 'error', 'message': 'Sin permisos'}), 403
     return _delete_voto(get_db(), 'institutos', eid, hid, 'empleados', 'institutos_history')
 
-# ---------- Rutas de Jubilados (ocultas en UI) ----------
+# ---------- Rutas de Jubilados ----------
 @app.route('/jubilados')
 @login_required
 @permission_required('jubilados')
@@ -1125,7 +1104,7 @@ def api_stats_entidades():
 
 @app.route('/test')
 def test():
-    return "✅ App v2.8 funcionando en Render"
+    return "✅ App v2.9 funcionando en Render"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8060))
